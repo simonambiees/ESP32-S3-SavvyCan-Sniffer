@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+cmake-build-*/
+
+# ESP-IDF configs
+#/sdkconfig
+sdkconfig.old
+sdkconfig.ci
+
+# VSCode
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env/
+
+# Logs / temp
+*.log
+*.tmp
