@@ -12,7 +12,7 @@
 #include "driver/usb_serial_jtag.h"
 #include "esp_timer.h"
 #include "esp_log.h"
-#include "esp_check.h"              // <-- for ESP_RETURN_ON_ERROR
+#include "esp_check.h"              // for ESP_RETURN_ON_ERROR
 
 #define TAG "SLCAN"
 
@@ -36,18 +36,20 @@ static inline int from_hex(char c){
 }
 
 // ---------- USB CDC I/O ----------
-static void usb_write_buf(const void *buf, size_t len){
-    (void)usb_serial_jtag_write_bytes((const uint8_t*)buf, len, 1000);
+static size_t usb_write_buf(const void *buf, size_t len){
+    return usb_serial_jtag_write_bytes((const uint8_t*)buf, len, pdMS_TO_TICKS(1000));
 }
-static void usb_write_str(const char *s){ usb_write_buf(s, strlen(s)); }
-static void usb_write_cr(void){ const char r='\r'; usb_write_buf(&r,1); }
-static void usb_write_bell(void){ const char b=0x07; usb_write_buf(&b,1); }
+static void usb_write_str(const char *s){ (void)usb_write_buf(s, strlen(s)); }
+static void usb_write_cr(void){ const char r='\r'; (void)usb_write_buf(&r,1); }
+static void usb_write_bell(void){ const char b=0x07; (void)usb_write_buf(&b,1); }
 
-// Blocking get one char
+// Blocking get one char (1 s polling, yields to scheduler)
 static int usb_read_char(uint8_t *out){
-    int n;
-    do { n = usb_serial_jtag_read_bytes(out, 1, 1000); } while(n == 0);
-    return n; // 1 on success
+    while (1) {
+        size_t n = usb_serial_jtag_read_bytes(out, 1, pdMS_TO_TICKS(1000));
+        if (n == 1) return 1;          // got a byte
+        vTaskDelay(pdMS_TO_TICKS(1));  // avoid tight spin if no host/data
+    }
 }
 
 // ---------- Bitrate handling (Sx) ----------
@@ -127,7 +129,7 @@ static void send_frame_slcan(const twai_message_t *m){
     }
 
     buf[p++] = '\r';
-    usb_write_buf(buf, p);
+    (void)usb_write_buf(buf, p);
 }
 
 // ---------- RX Task (CAN -> Host) ----------
@@ -229,7 +231,15 @@ static void usb_rx_task(void *arg){
 // ---------- Main ----------
 void app_main(void){
     ESP_LOGI(TAG, "SLCAN bridge starting (USB CDC + TWAI)");
-    // USB-Serial-JTAG driver is ready after reset (no explicit init required)
+
+    // *** IMPORTANT: Install USB-Serial-JTAG driver BEFORE using read/write ***
+    usb_serial_jtag_driver_config_t cfg = {
+        .tx_buffer_size = 512,
+        .rx_buffer_size = 512,
+    };
+    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&cfg));
+
+    // Now it's safe to start tasks that call usb_serial_jtag_* APIs
     xTaskCreatePinnedToCore(usb_rx_task, "usb_rx", 4096, NULL, 10, NULL, 0);
     xTaskCreatePinnedToCore(can_rx_task, "can_rx", 4096, NULL, 9,  NULL, 1);
 }
